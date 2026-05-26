@@ -45,6 +45,20 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg-base); color: var(--text); height: 100vh; overflow: hidden; }
 
+  /* Subtle dark scrollbars — overrides macOS "Always show" mode that otherwise
+     paints them as a bright contrasting strip against the dark UI. */
+  * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); background-clip: padding-box; }
+  ::-webkit-scrollbar-corner { background: transparent; }
+
   /* ─────────────────────────────────────────────────────────
      App shell
      ───────────────────────────────────────────────────────── */
