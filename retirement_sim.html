@@ -1,0 +1,1546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Retirement Monte Carlo Simulator</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230f1117'/><path d='M6 50 C 18 46, 26 30, 38 22 S 54 10, 58 8' fill='none' stroke='%234f8ef7' stroke-width='4' stroke-linecap='round'/><path d='M6 58 C 18 54, 26 42, 38 34 S 54 22, 58 20 L 58 36 C 54 38, 46 44, 38 48 S 18 56, 6 60 Z' fill='%234f8ef7' fill-opacity='0.25'/><circle cx='52' cy='14' r='5' fill='%2322d3a0'/></svg>">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  /* ─────────────────────────────────────────────────────────
+     Design tokens
+     ───────────────────────────────────────────────────────── */
+  :root {
+    --bg-base:        #0f1117;
+    --bg-card:        #161b27;
+    --bg-card-hover:  #1a2030;
+    --bg-tooltip:     #1a2235;
+    --bg-tip-icon:    #252f42;
+    --bg-inset:       #0d1119;
+    --border:         #1e2736;
+    --border-strong:  #2d3748;
+    --border-hover:   #3d4a5e;
+    --text:           #e2e8f0;
+    --text-headline:  #f0f4ff;
+    --text-muted:     #94a3b8;
+    --text-dim:       #64748b;
+    --text-faint:     #475569;
+    --text-fainter:   #334155;
+    --accent:         #4f8ef7;
+    --accent-hover:   #3b7de8;
+    --accent-light:   #7db3fa;
+    --success:        #22d3a0;
+    --success-light:  #86efac;
+    --warn:           #fbbf24;
+    --bad:            #f87171;
+
+    --sidebar-w: 360px;
+    --radius:    10px;
+    --radius-sm: 6px;
+  }
+
+  /* ─────────────────────────────────────────────────────────
+     Reset & base
+     ───────────────────────────────────────────────────────── */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg-base); color: var(--text); height: 100vh; overflow: hidden; }
+
+  /* ─────────────────────────────────────────────────────────
+     App shell
+     ───────────────────────────────────────────────────────── */
+  .app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: 100vh; overflow: hidden; transition: grid-template-columns 0.25s ease; }
+  .app.sidebar-hidden { grid-template-columns: 0 minmax(0, 1fr); }
+
+  .sidebar { background: var(--bg-card); border-right: 1px solid var(--border); padding: 0 24px 24px; height: 100vh; overflow-y: auto; overflow-x: hidden; position: relative; transition: opacity 0.2s ease; }
+  .app.sidebar-hidden .sidebar { opacity: 0; pointer-events: none; }
+
+  .main { padding: 28px; height: 100vh; overflow-y: auto; overflow-x: hidden; min-width: 0; }
+
+  /* ─── Sidebar collapse controls ─── */
+  /* Desktop: a single drawer handle anchored to the top-right edge of the
+     sidebar so it reads as part of the nav bar itself. Slides with the
+     sidebar's right edge; icon flips to match the action it'll perform. */
+  .sidebar-handle {
+    position: fixed; top: 26px; left: var(--sidebar-w);
+    width: 16px; height: 28px;
+    background: var(--bg-card); border: 1px solid var(--border); border-left: none;
+    border-radius: 0 4px 4px 0;
+    color: var(--text-faint); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; line-height: 1; padding: 0;
+    z-index: 100;
+    transition: left 0.25s ease, background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .sidebar-handle:hover { background: var(--bg-card-hover); color: var(--text-headline); border-color: var(--border-hover); }
+  .sidebar-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .app.sidebar-hidden ~ .sidebar-handle { left: 0; }
+
+  /* Mobile: inline expand/collapse button under header — same chevron metaphor as the
+     desktop handle, just rotated for the vertical stacking direction. */
+  .sidebar-toggle {
+    display: none; align-items: center; gap: 10px;
+    padding: 10px 14px;
+    background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-muted); font-size: 12px; font-weight: 600;
+    cursor: pointer; user-select: none; margin-top: 14px; width: 100%;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .sidebar-toggle:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
+  .sidebar-toggle .chev { color: var(--text-dim); font-size: 13px; margin-left: auto; transition: transform 0.2s; line-height: 1; }
+  .sidebar-toggle.collapsed .chev { transform: rotate(-90deg); }
+
+  /* ─── Sidebar header / sections ─── */
+  /* Sticky on desktop so the title stays put while inputs scroll. The
+     sidebar has no padding-top — the header occupies that space itself with
+     its own padding, which keeps the sticky anchor at the true top of the
+     sidebar (no gap for scrolled content to peek through). Negative
+     horizontal margins bleed it to the sidebar's edges. */
+  .sidebar-header {
+    position: sticky; top: 0; z-index: 5;
+    background: var(--bg-card);
+    margin: 0 -24px 16px;
+    padding: 22px 24px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-header h1 { font-size: 18px; font-weight: 700; color: var(--text-headline); letter-spacing: -0.3px; }
+  .sidebar-header p  { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+  .section { margin-bottom: 24px; }
+  .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-faint); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .field { margin-bottom: 14px; }
+
+  /* ─── Label + tooltip ─── */
+  .lbl-row { position: relative; display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
+  .lbl-text { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+  .tip-wrap { position: static; display: inline-flex; }
+  .tip-icon { width: 13px; height: 13px; border-radius: 50%; background: var(--bg-tip-icon); color: var(--text-faint); font-size: 8px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; flex-shrink: 0; line-height: 1; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .tip-icon:hover { background: #2d3f5a; color: var(--text-muted); }
+  .tip-bubble { display: none; position: absolute; left: 0; right: 0; max-width: 320px; top: calc(100% + 4px); background: var(--bg-tooltip); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px 12px; font-size: 11px; color: var(--text-muted); line-height: 1.6; z-index: 9999; pointer-events: none; box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
+  .tip-wrap:hover .tip-bubble,
+  .tip-wrap:focus-within .tip-bubble { display: block; }
+
+  /* ─── Inputs ─── */
+  input[type="number"], input[type="text"], input[type="range"], select {
+    width: 100%; background: var(--bg-base); border: 1px solid var(--border-strong); color: var(--text);
+    border-radius: var(--radius-sm); font-size: 13px; transition: border-color 0.15s;
+  }
+  input[type="number"], input[type="text"], select { padding: 8px 10px; }
+  input[type="number"]:focus, input[type="text"]:focus, select:focus { outline: none; border-color: var(--accent); }
+  select { cursor: pointer; }
+  option { background: var(--bg-card); }
+  input[type="range"]:disabled { opacity: 0.5; }
+
+  .range-row { display: flex; align-items: center; gap: 10px; }
+  .range-row input[type="range"] { flex: 1; -webkit-appearance: none; height: 4px; background: var(--border-strong); border-radius: 2px; border: none; padding: 0; }
+  .range-row input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+  .range-value { font-size: 13px; font-weight: 600; color: var(--text); min-width: 42px; text-align: right; }
+
+  .input-prefix { position: relative; }
+  .input-prefix span { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-dim); font-size: 13px; pointer-events: none; }
+  .input-prefix input { padding-left: 22px; }
+
+  /* Frequency toggle (monthly / annual) */
+  .freq-toggle { display: flex; background: var(--bg-inset); border: 1px solid var(--border-strong); border-radius: 5px; padding: 2px; gap: 2px; margin-left: auto; flex-shrink: 0; }
+  .freq-btn { background: none; border: none; color: var(--text-faint); font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 3px; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+  .freq-btn.active { background: var(--accent); color: #fff; }
+  .freq-btn:hover:not(.active) { color: var(--text-muted); }
+
+  /* Per-field hints */
+  .select-hint { margin-top: 6px; font-size: 11px; color: var(--text-faint); line-height: 1.55; padding: 7px 9px; background: var(--bg-base); border-radius: 5px; border-left: 2px solid var(--border-strong); }
+  .input-hint { margin-top: 5px; font-size: 10.5px; color: var(--text-faint); line-height: 1.5; font-style: italic; }
+
+  /* Computed years badge */
+  .years-badge { display: inline-block; font-size: 11px; color: var(--accent); font-weight: 600; margin-top: 6px; }
+
+  /* Auto-run toggle row */
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--bg-base); border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; }
+  .toggle-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+  .toggle-sub { font-size: 10px; color: var(--text-faint); margin-top: 1px; }
+  .toggle-switch { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; }
+  .toggle-track { position: absolute; inset: 0; background: var(--border-strong); border-radius: 10px; cursor: pointer; transition: background 0.2s; }
+  .toggle-track::before { content: ''; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px; background: var(--text-dim); border-radius: 50%; transition: transform 0.2s, background 0.2s; }
+  .toggle-switch input:checked + .toggle-track { background: #4f8ef720; border: 1px solid #4f8ef760; }
+  .toggle-switch input:checked + .toggle-track::before { transform: translateX(16px); background: var(--accent); }
+
+  /* Run button */
+  .run-btn { width: 100%; padding: 12px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s, transform 0.1s; letter-spacing: -0.2px; }
+  .run-btn:hover { background: var(--accent-hover); }
+  .run-btn:active { transform: scale(0.98); }
+  .run-btn:disabled { background: var(--border-strong); color: var(--text-dim); cursor: not-allowed; transform: none; }
+  .run-btn.stale { background: #2d4a7a; border: 1px solid #4f8ef750; animation: pulse-btn 2s ease-in-out infinite; }
+  @keyframes pulse-btn { 0%,100% { opacity:1 } 50% { opacity:0.7 } }
+
+  /* ─────────────────────────────────────────────────────────
+     Main panel: cards
+     ───────────────────────────────────────────────────────── */
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 20px; }
+
+  /* Interpretation */
+  .interp-card { padding: 20px 22px; border-left: 3px solid var(--accent); }
+  .interp-card.great { border-left-color: var(--success); }
+  .interp-card.good  { border-left-color: var(--success-light); }
+  .interp-card.warn  { border-left-color: var(--warn); }
+  .interp-card.bad   { border-left-color: var(--bad); }
+  .interp-headline { font-size: 15px; font-weight: 700; color: var(--text-headline); margin-bottom: 8px; letter-spacing: -0.2px; }
+  .interp-body { font-size: 13px; color: var(--text-dim); line-height: 1.7; }
+  .interp-body strong { color: var(--text-muted); }
+  .interp-body .hi { color: var(--text); font-weight: 600; }
+  .interp-note { display: block; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); font-size: 11.5px; color: var(--text-faint); line-height: 1.6; font-style: italic; }
+  .interp-note strong { color: var(--text-dim); font-weight: 600; }
+  .interp-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .interp-pill { font-size: 11px; padding: 3px 10px; border-radius: 10px; font-weight: 500; }
+  .pill-green { background: #22d3a015; color: var(--success); border: 1px solid #22d3a030; }
+  .pill-blue  { background: #4f8ef715; color: var(--accent-light); border: 1px solid #4f8ef730; }
+  .pill-yellow{ background: #fbbf2415; color: var(--warn); border: 1px solid #fbbf2430; }
+  .pill-red   { background: #f8717115; color: var(--bad); border: 1px solid #f8717130; }
+
+  /* KPIs */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+  .kpi { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
+  .kpi-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.7px; font-weight: 600; margin-bottom: 6px; }
+  .kpi-value { font-size: 28px; font-weight: 700; letter-spacing: -1px; line-height: 1; color: var(--text-muted); }
+  .kpi-sub   { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .kpi-success.great { color: var(--success); }
+  .kpi-success.good  { color: var(--success-light); }
+  .kpi-success.warn  { color: var(--warn); }
+  .kpi-success.bad   { color: var(--bad); }
+
+  /* Chart cards — fan chart gets ~2/3 of the row, histogram gets ~1/3.
+     Cards are flex columns so the chart-wrap can fill remaining vertical
+     space — keeps the chart from leaving empty padding when its sibling
+     card is taller. */
+  .charts { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 20px; margin-bottom: 20px; min-width: 0; }
+  .chart-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
+  .chart-card.full { grid-column: 1 / -1; }
+  .chart-hdr { position: relative; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .chart-title { font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 0; }
+  .chart-sub   { font-size: 11px; color: var(--text-faint); margin-bottom: 16px; }
+  .chart-wrap  { position: relative; width: 100%; flex: 1 1 220px; min-height: 220px; }
+  .chart-wrap canvas { max-width: 100% !important; }
+  .band-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+  .band-item   { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
+  .band-dot    { width: 10px; height: 10px; border-radius: 2px; }
+
+  /* Data note */
+  .data-note { padding: 16px 20px; }
+  .data-note p { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+  .data-note strong { color: var(--text-muted); }
+
+  /* Explainer accordion */
+  .explainer { overflow: hidden; }
+  .explainer-head { display: flex; align-items: center; gap: 10px; padding: 14px 20px; cursor: pointer; user-select: none; transition: background 0.15s; }
+  .explainer-head:hover { background: var(--bg-card-hover); }
+  .explainer-icon { width: 24px; height: 24px; border-radius: 50%; background: #4f8ef720; color: var(--accent); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-style: italic; font-family: Georgia, serif; }
+  .explainer-icon.inline { display: inline-flex; width: 14px; height: 14px; font-size: 8px; vertical-align: middle; }
+  .explainer-title { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: -0.1px; flex: 1; }
+  .explainer-chev { color: var(--text-muted); font-size: 18px; line-height: 1; transition: transform 0.2s; }
+  .explainer.collapsed .explainer-chev { transform: rotate(-90deg); }
+  .explainer-body { padding: 0 20px 20px 20px; border-top: 1px solid var(--border); }
+  .explainer.collapsed .explainer-body { display: none; }
+  .explainer-body p { font-size: 13px; color: var(--text-muted); line-height: 1.7; margin-top: 14px; }
+  .explainer-body p:first-child { margin-top: 16px; }
+  .explainer-body strong { color: var(--text); font-weight: 600; }
+  .explainer-body em { color: var(--accent-light); font-style: normal; font-weight: 500; }
+  .explainer-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+  .explainer-step { background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .explainer-step-num { font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 4px; }
+  .explainer-step-text { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+
+  /* Empty state */
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 400px; }
+  .empty h2 { font-size: 16px; font-weight: 600; margin-bottom: 8px; color: var(--text-dim); }
+  .empty p  { font-size: 13px; color: var(--text-faint); }
+
+  /* ─── Snapshot table ─── */
+  .dist-card { padding: 20px; min-width: 0; overflow: hidden; }
+  .snapshot-table-wrap { overflow-x: auto; }
+  .snapshot-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+  .snapshot-table th { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text-faint); padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: right; }
+  .snapshot-table th:first-child { text-align: left; }
+  .snapshot-table td { padding: 9px 12px; border-bottom: 1px solid #1e273680; color: var(--text-muted); vertical-align: middle; text-align: right; font-variant-numeric: tabular-nums; }
+  .snapshot-table tr:last-child td { border-bottom: none; }
+  .snapshot-table tr:hover td { background: #1e273640; }
+  .snapshot-th-sub { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-fainter); }
+
+  /* Percentile label column */
+  .snapshot-table .pct-cell { text-align: left; }
+  .pct-label-text { color: var(--text); font-size: 12px; font-weight: 700; }
+  .pct-desc-text  { color: var(--text-faint); font-size: 10px; margin-top: 1px; font-weight: 400; }
+
+  /* Two-line value cell: balance + multiple of starting portfolio */
+  .snapshot-table .cell-primary { font-weight: 600; color: var(--text); font-size: 12px; line-height: 1.3; }
+  .snapshot-table .cell-secondary { font-size: 10px; color: var(--text-faint); font-weight: 400; margin-top: 2px; line-height: 1.2; }
+  .snapshot-table .cell-warn .cell-primary { color: var(--warn); }
+  .snapshot-table .cell-fail .cell-primary { color: var(--bad); }
+  .snapshot-table .cell-depleted { color: var(--bad); font-style: italic; font-weight: 500; }
+
+  /* Highlighted median row */
+  .snapshot-table .row-median td { background: #4f8ef70a; }
+  .snapshot-table .row-median:hover td { background: #4f8ef714; }
+  .snapshot-table .row-median .pct-label-text { color: var(--accent); }
+  .snapshot-table .row-median .cell-primary { color: var(--accent-light); }
+  .snapshot-table .row-median .cell-secondary { color: var(--text-dim); }
+
+  /* ─────────────────────────────────────────────────────────
+     Responsive
+     ───────────────────────────────────────────────────────── */
+  /* Tablet / small laptop: stack to single column */
+  @media (max-width: 900px) {
+    body { height: auto; overflow: auto; }
+    .app { grid-template-columns: 1fr; height: auto; overflow: visible; }
+    .sidebar-handle { display: none !important; }
+    .sidebar { height: auto; max-height: none; overflow: visible; border-right: none; border-bottom: 1px solid var(--border); padding: 20px; }
+    .sidebar-header { position: static; margin: 0 0 0; padding: 0; border-bottom: none; }
+    .sidebar-body { margin-top: 20px; }
+    .sidebar-body.collapsed { display: none; }
+    .sidebar-toggle { display: flex; }
+    .main { height: auto; overflow: visible; padding: 20px; }
+    .kpis { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .kpi { padding: 14px 16px; }
+    .kpi-value { font-size: 22px; }
+    .charts { grid-template-columns: 1fr; gap: 16px; }
+    .chart-card { padding: 16px; }
+    .interp-card { padding: 16px 18px; }
+    .interp-headline { font-size: 14px; }
+    .interp-body { font-size: 12.5px; }
+    .explainer-head { padding: 12px 16px; }
+    .explainer-body { padding: 0 16px 16px 16px; }
+    .explainer-body p { font-size: 12.5px; }
+    .explainer-steps { grid-template-columns: 1fr; }
+    .data-note { padding: 12px 16px; }
+    .data-note p { font-size: 11.5px; }
+    .lbl-text { font-size: 13px; }
+    input[type="number"], input[type="text"], select { font-size: 16px; padding: 10px 12px; }
+    .input-prefix input { padding-left: 24px; }
+    .input-prefix span { font-size: 14px; }
+    .run-btn { padding: 14px; font-size: 15px; }
+  }
+
+  /* Phone */
+  @media (max-width: 600px) {
+    .sidebar, .main { padding: 16px; }
+    .kpis { grid-template-columns: 1fr; }
+    .kpi-value { font-size: 24px; }
+    .interp-pills { gap: 6px; }
+    .interp-pill { font-size: 10.5px; padding: 2px 8px; }
+    .sidebar-header h1 { font-size: 16px; }
+    .freq-toggle { margin-left: 0; }
+    .lbl-row { flex-wrap: wrap; gap: 6px; }
+    .tip-bubble { font-size: 11px; max-width: 260px; }
+    .snapshot-table th, .snapshot-table td { padding: 7px 9px; font-size: 11px; }
+    .explainer-title { font-size: 12.5px; }
+    .explainer-body p { font-size: 12px; }
+    .explainer-step-text { font-size: 11.5px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <h1>Retirement Simulator</h1>
+    <p>Monte Carlo · 100 years of market data</p>
+  </div>
+
+  <button class="sidebar-toggle" id="sidebarToggle" aria-expanded="true">
+    <span id="sidebarToggleLabel">Hide inputs</span>
+    <span class="chev">▾</span>
+  </button>
+
+  <div class="sidebar-body" id="sidebarBody">
+
+    <!-- ─── Portfolio ─── -->
+    <div class="section">
+      <div class="section-title">Portfolio</div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Current Portfolio Value</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">The total value of all your investable assets today — 401(k), IRA, brokerage accounts, savings, etc. Does <em>not</em> include home equity or illiquid assets unless you plan to sell them.</span></span>
+        </div>
+        <div class="input-prefix"><span>$</span>
+          <input type="text" id="portfolio" value="2,000,000" inputmode="numeric">
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text" id="spendLabel">Monthly Spending</span>
+          <div class="freq-toggle">
+            <button class="freq-btn active" id="freqMonthly">Monthly</button>
+            <button class="freq-btn"        id="freqAnnual">Annual</button>
+          </div>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">How much you plan to spend in retirement in today's purchasing power. Toggle between monthly and annual entry — the value converts automatically. The simulation inflates spending forward each year. Include all living expenses: housing, food, travel, healthcare, etc.</span></span>
+        </div>
+        <div class="input-prefix"><span>$</span>
+          <input type="text" id="spending" value="10,000" inputmode="numeric">
+        </div>
+        <div class="input-hint">In today's dollars — the simulation inflates this each year.</div>
+      </div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Annual Social Security / Pension Income</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">Guaranteed income you'll receive each year — Social Security, pension, annuity, rental income, etc. This directly reduces how much you need to withdraw from your portfolio. Enter 0 if none.</span></span>
+        </div>
+        <div class="input-prefix"><span>$</span>
+          <input type="text" id="income" value="24,000" inputmode="numeric">
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Timeline ─── -->
+    <div class="section">
+      <div class="section-title">Retirement Timeline</div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Retirement Start Age</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">The age you retire and begin drawing from your portfolio. Earlier retirement means more years your money must last — and more exposure to sequence-of-returns risk in the critical early years.</span></span>
+        </div>
+        <input type="number" id="startAge" value="65" min="25" max="90">
+      </div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Retirement End Age</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">The age your portfolio needs to last to. When in doubt, go longer — outliving your money at 88 is catastrophic, while leaving money behind is fine. Most planners recommend age 95–100 for healthy retirees to be safe.</span></span>
+        </div>
+        <input type="number" id="endAge" value="95" min="50" max="120">
+      </div>
+
+      <div id="yearsDisplay" class="years-badge">= 30 years in retirement</div>
+    </div>
+
+    <!-- ─── Asset Allocation ─── -->
+    <div class="section">
+      <div class="section-title">Asset Allocation</div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Stocks (S&amp;P 500)</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">The percentage of your portfolio in US equities. Higher stock allocation historically produces better long-term returns but with much more year-to-year volatility. A bad sequence of stock crashes early in retirement is the #1 portfolio killer.</span></span>
+        </div>
+        <div class="range-row">
+          <input type="range" id="stocksRange" min="0" max="100" value="60" step="5">
+          <span class="range-value" id="stocksVal">60%</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Bonds (10-yr Treasury)</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">Auto-calculated as the remainder after stocks and cash. Bonds provide a cushion in stock downturns and smoother returns — but lower long-term growth. Adjust via the Stocks slider.</span></span>
+        </div>
+        <div class="range-row">
+          <input type="range" id="bondsRange" min="0" max="100" value="35" step="5" disabled>
+          <span class="range-value" id="bondsVal">35%</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Cash / Short-term</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">Held constant at 5% (or less if stocks are 95%+). Cash earns ~0% real return in the simulation. It provides a small liquidity buffer but is a drag on long-term performance.</span></span>
+        </div>
+        <div class="range-row">
+          <input type="range" min="0" max="100" value="5" step="5" disabled>
+          <span class="range-value" id="cashVal">5%</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Annual Advisory / Fund Fees</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">Total annual cost as a % of portfolio — includes fund expense ratios plus any advisor fee. 0.05–0.10% is typical for low-cost index funds. 1.0%+ for actively managed accounts. Even 0.5% compounded over 30 years meaningfully reduces outcomes.</span></span>
+        </div>
+        <div class="range-row">
+          <input type="range" id="feesRange" min="0" max="2" value="0.3" step="0.05">
+          <span class="range-value" id="feesVal">0.10%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Inflation & Spending ─── -->
+    <div class="section">
+      <div class="section-title">Inflation &amp; Spending</div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Inflation Model</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">Controls how inflation is modeled each year. Historical bootstrap uses actual CPI data from 1926–2024. Fixed rate applies the same rate every year.</span></span>
+        </div>
+        <select id="inflationMode">
+          <option value="historical">Historical (bootstrapped)</option>
+          <option value="fixed">Fixed rate</option>
+        </select>
+        <div class="select-hint" id="inflationModeHint"></div>
+      </div>
+
+      <div class="field" id="fixedInflationField" style="display:none">
+        <div class="lbl-row">
+          <span class="lbl-text">Fixed Inflation Rate</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">The annual inflation rate applied to your spending every year. The US long-run average is ~3%. Use 3.5–4% for a conservative stress test. Healthcare costs in retirement often run hotter than general CPI.</span></span>
+        </div>
+        <div class="range-row">
+          <input type="range" id="fixedInflRange" min="0" max="10" value="3" step="0.1">
+          <span class="range-value" id="fixedInflVal">3.0%</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Withdrawal Strategy</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">How you decide how much to take out each year. This is one of the biggest levers in retirement planning — flexible strategies can significantly improve success probability.</span></span>
+        </div>
+        <select id="strategy">
+          <option value="constant" selected>Constant real (inflation-adjusted)</option>
+          <option value="flexible">Flexible (Guyton-Klinger guardrails)</option>
+          <option value="pct">Fixed % of remaining portfolio</option>
+        </select>
+        <div class="select-hint" id="strategyHint"></div>
+      </div>
+
+      <div class="field" id="pctField" style="display:none">
+        <div class="lbl-row">
+          <span class="lbl-text">Withdrawal % of Portfolio</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">What fraction of your current portfolio balance you withdraw each year. 4% on $1M = $40K. Because you're taking a % of a fluctuating balance, your actual spending varies year-to-year — but you can never technically go to zero.</span></span>
+        </div>
+        <div class="range-row">
+          <input type="range" id="pctRange" min="1" max="8" value="4" step="0.25">
+          <span class="range-value" id="pctVal">4.00%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Simulation ─── -->
+    <div class="section">
+      <div class="section-title">Simulation</div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Number of Simulations</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">How many independent retirement scenarios to run. More simulations = more stable results that vary less between runs. 5,000 is a good balance of speed and precision for most purposes.</span></span>
+        </div>
+        <select id="numSims">
+          <option value="1000">1,000 (fast)</option>
+          <option value="5000" selected>5,000 (recommended)</option>
+          <option value="10000">10,000 (precise)</option>
+        </select>
+        <div class="select-hint" id="numSimsHint"></div>
+      </div>
+
+      <div class="field">
+        <div class="lbl-row">
+          <span class="lbl-text">Sampling Method</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">How each year's returns are generated. Bootstrap draws real historical years so you get actual correlations (e.g. 2008's crash hit stocks AND bonds simultaneously). Parametric uses a normal distribution — faster but misses fat tails.</span></span>
+        </div>
+        <select id="samplingMethod">
+          <option value="bootstrap">Historical bootstrap (sequence risk)</option>
+          <option value="parametric">Parametric (normal distribution)</option>
+        </select>
+        <div class="select-hint" id="samplingHint"></div>
+      </div>
+    </div>
+
+    <!-- ─── Run controls ─── -->
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Auto-run on changes</div>
+        <div class="toggle-sub">Re-simulate when any input changes</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="autoRunToggle" checked>
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+
+    <button class="run-btn" id="runBtn">Run Simulation</button>
+
+  </div><!-- /.sidebar-body -->
+</aside>
+
+<!-- ═══════════════════════ MAIN ═══════════════════════ -->
+<main class="main">
+
+  <!-- Plain-English explainer (collapsible) -->
+  <div class="card explainer" id="explainerCard">
+    <div class="explainer-head" id="explainerHead">
+      <div class="explainer-icon">i</div>
+      <div class="explainer-title">New to Monte Carlo simulations? Start here.</div>
+      <div class="explainer-chev">▾</div>
+    </div>
+    <div class="explainer-body">
+      <p>
+        Nobody knows what the stock market will do over the next 30 years — so instead of guessing, this tool <strong>replays history thousands of times</strong> using real returns from 1926 to today. Each replay (a "simulation") strings together a random sequence of past years — booms, crashes, inflation spikes, all of it — and rolls your portfolio forward, withdrawing your spending along the way.
+      </p>
+      <div class="explainer-steps">
+        <div class="explainer-step">
+          <div class="explainer-step-num">1 · Setup</div>
+          <div class="explainer-step-text">You enter your portfolio, spending, age, and asset allocation in the sidebar.</div>
+        </div>
+        <div class="explainer-step">
+          <div class="explainer-step-num">2 · Simulate</div>
+          <div class="explainer-step-text">We run ~1,000 alternate futures, each using a different random sequence of real historical market years.</div>
+        </div>
+        <div class="explainer-step">
+          <div class="explainer-step-num">3 · Summarize</div>
+          <div class="explainer-step-text">We report the <em>range</em> of outcomes — not a single forecast.</div>
+        </div>
+      </div>
+      <p>
+        The headline number is the <strong>success rate</strong>: the percentage of those simulations where your money outlasted you. A 90% success rate means that out of every 100 plausible market histories, your plan survived in 90 of them.
+      </p>
+      <p>
+        The percentile bands show the spread of outcomes. If markets are kind to you (the <em>95th percentile</em>), you'll end up with much more than the median. If they're cruel — especially in your first few retirement years (<em>sequence-of-returns risk</em>) — you could end up at the <em>5th percentile</em> with much less, or broke. This honest range is more useful than any single "you'll have $X at 90" prediction, because retirement planning is fundamentally about <strong>probabilities, not certainties</strong>.
+      </p>
+      <p>
+        Hover the <span class="explainer-icon inline">i</span> icons anywhere on the page for definitions of each input and chart.
+      </p>
+    </div>
+  </div>
+
+  <div class="empty" id="emptyState">
+    <h2>Configure &amp; Run</h2>
+    <p>Set your inputs on the left and click Run Simulation.</p>
+  </div>
+
+  <div id="results" style="display:none">
+
+    <div class="card interp-card" id="interpCard">
+      <div class="interp-headline" id="interpHeadline"></div>
+      <div class="interp-body" id="interpBody"></div>
+      <div class="interp-pills" id="interpPills"></div>
+    </div>
+
+    <div class="kpis" id="kpiRow"></div>
+    <div class="card data-note" id="dataNoteEl"></div>
+
+    <div class="charts">
+      <div class="chart-card">
+        <div class="chart-hdr">
+          <span class="chart-title">Portfolio Value Over Time — Percentile Bands</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">Each line or shaded band tracks your portfolio balance year by year. The wide outer band covers 80% of all outcomes (10th–90th percentile); the narrower inner band covers 50% (25th–75th). The blue line is the median — half of all simulations end above it, half below. Red lines are sample runs that failed. The fan shape widens over time because small early differences compound dramatically — this is sequence-of-returns risk in action.</span></span>
+        </div>
+        <div class="chart-sub">Based on <span id="simCountLabel"></span> simulations · shaded bands show 10th–90th, 25th–75th percentiles</div>
+        <div class="band-legend">
+          <div class="band-item"><div class="band-dot" style="background:#4f8ef720"></div>10th–90th pct</div>
+          <div class="band-item"><div class="band-dot" style="background:#4f8ef750"></div>25th–75th pct</div>
+          <div class="band-item"><div class="band-dot" style="background:#4f8ef7"></div>Median</div>
+          <div class="band-item"><div class="band-dot" style="background:#f87171"></div>Failed runs (sample paths)</div>
+        </div>
+        <div class="chart-wrap"><canvas id="fanChart" height="260"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-hdr">
+          <span class="chart-title">Final Portfolio Distribution</span>
+          <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">A histogram of every simulation's ending balance at your target age. Bars on the left (near $0) are failed scenarios. A tall cluster on the right means many simulations ended wealthy. A wide spread indicates high outcome uncertainty — the same plan can end very differently depending on market luck. A narrow cluster means your result is fairly predictable regardless of market conditions.</span></span>
+        </div>
+        <div class="chart-sub">Histogram of ending values at year <span class="endYearLabel"></span></div>
+        <div class="chart-wrap"><canvas id="histChart" height="220"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card dist-card">
+      <div class="chart-hdr">
+        <span class="chart-title">Portfolio Snapshot — Value at Each Decade</span>
+        <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">A grid showing your portfolio balance at each decade for each luck level. The first line in each cell is the dollar balance; the second line is its multiple of your starting portfolio (so 1.5× means your portfolio grew 50%). Read across a row to follow one scenario over time. Read down a column to compare outcomes at a specific age. Red cells have run out of money. Yellow cells are dangerously low (under $600K). The median row is highlighted — that's the typical outcome.</span></span>
+      </div>
+      <div class="chart-sub" id="snapshotSubLabel"></div>
+      <div class="snapshot-table-wrap" id="snapshotTableEl"></div>
+    </div>
+  </div>
+</main>
+</div>
+
+<button class="sidebar-handle" id="sidebarHandle" aria-label="Hide sidebar" title="Hide sidebar">◀</button>
+
+<script>
+'use strict';
+
+// ═════════════════════════════════════════════════════════
+// HISTORICAL DATA — 1926–2024
+// [year, S&P 500 total return %, 10-yr Treasury %, CPI %]
+// ═════════════════════════════════════════════════════════
+const HISTORICAL = [
+  [1926, 11.6,  7.8, -1.5],[1927, 37.5,  8.9, -1.7],[1928, 43.6,  0.1, -1.2],[1929, -8.4,  3.4,  0.0],
+  [1930,-24.9,  4.7, -2.3],[1931,-43.3, -5.3, -9.0],[1932, -8.2, 16.8, -9.9],[1933, 54.0, -0.1, -5.1],
+  [1934, -1.4, 10.0,  3.1],[1935, 47.7,  5.0,  2.2],[1936, 33.9,  7.5,  1.5],[1937,-35.0,  0.2,  3.6],
+  [1938, 31.1,  5.5, -2.1],[1939, -0.4,  5.9, -1.4],[1940, -9.8,  6.1,  0.7],[1941,-11.6,  0.9,  5.0],
+  [1942, 20.3,  3.2, 10.9],[1943, 25.9,  2.1,  6.1],[1944, 19.8,  2.8,  1.7],[1945, 36.4, 10.7,  2.3],
+  [1946, -8.1, -0.1,  8.3],[1947,  5.7, -2.6, 14.4],[1948,  5.5,  3.4,  8.1],[1949, 18.8,  6.5, -1.2],
+  [1950, 31.7,  0.1,  1.3],[1951, 24.0, -3.9,  7.9],[1952, 18.4,  1.2,  1.9],[1953, -1.0,  3.6,  0.8],
+  [1954, 52.6,  7.2,  0.7],[1955, 31.6, -1.3, -0.4],[1956,  6.6, -5.6,  1.5],[1957,-10.8,  7.5,  3.3],
+  [1958, 43.4, -6.1,  2.8],[1959, 12.0, -2.3,  0.7],[1960,  0.5, 13.8,  1.7],[1961, 26.9,  0.9,  1.0],
+  [1962, -8.7,  6.9,  1.0],[1963, 22.8,  1.2,  1.3],[1964, 16.5,  3.7,  1.3],[1965, 12.5,  0.7,  1.6],
+  [1966,-10.1,  3.7,  2.9],[1967, 24.0, -9.2,  3.1],[1968, 11.1, -0.3,  4.2],[1969, -8.5, -8.1,  5.5],
+  [1970,  4.0, 12.1,  5.7],[1971, 14.3, 13.2,  4.4],[1972, 19.0,  5.7,  3.2],[1973,-14.7, -1.1,  6.2],
+  [1974,-26.5,  4.4, 11.0],[1975, 37.2,  9.2,  9.1],[1976, 23.9, 16.8,  5.8],[1977, -7.2, -0.7,  6.5],
+  [1978,  6.6, -1.2,  7.6],[1979, 18.6, -1.2, 11.3],[1980, 32.4, -4.0, 13.5],[1981, -4.9,  1.9, 10.3],
+  [1982, 21.4, 40.4,  6.2],[1983, 22.5,  0.7,  3.2],[1984,  6.3, 15.3,  4.3],[1985, 32.2, 30.1,  3.6],
+  [1986, 18.5, 24.5,  1.9],[1987,  5.2, -2.7,  3.6],[1988, 16.8,  9.7,  4.1],[1989, 31.5, 18.1,  4.8],
+  [1990, -3.2,  6.2,  5.4],[1991, 30.6, 19.3,  4.2],[1992,  7.7,  8.1,  3.0],[1993,  9.9, 18.2,  3.0],
+  [1994,  1.3, -7.8,  2.6],[1995, 37.4, 31.7,  2.8],[1996, 23.1, -0.9,  3.0],[1997, 33.4, 11.6,  2.3],
+  [1998, 28.6, 14.9,  1.6],[1999, 21.0, -8.3,  2.2],[2000, -9.1, 16.7,  3.4],[2001,-11.9,  5.6,  2.8],
+  [2002,-22.1, 15.1,  1.6],[2003, 28.7,  0.4,  2.3],[2004, 10.9,  4.5,  2.7],[2005,  4.9,  2.9,  3.4],
+  [2006, 15.8,  1.9,  3.2],[2007,  5.5, 10.2,  2.8],[2008,-37.0, 25.9,  3.8],[2009, 26.5,-11.1, -0.4],
+  [2010, 15.1,  8.5,  1.6],[2011,  2.1, 16.0,  3.2],[2012, 16.0,  2.6,  2.1],[2013, 32.4, -9.1,  1.5],
+  [2014, 13.7, 10.7,  1.6],[2015,  1.4,  1.3,  0.1],[2016, 12.0,  1.0,  1.3],[2017, 21.8,  2.3,  2.1],
+  [2018, -4.4, -0.1,  2.4],[2019, 31.5,  9.6,  2.3],[2020, 18.4, 11.3,  1.2],[2021, 28.7, -4.4,  7.0],
+  [2022,-18.1,-17.8,  6.5],[2023, 26.3,  4.1,  3.4],[2024, 25.0, -1.6,  2.9],
+];
+
+// ═════════════════════════════════════════════════════════
+// CONSTANTS
+// ═════════════════════════════════════════════════════════
+const BREAKPOINT_MOBILE   = 900;     // px — viewports ≤ this width get the stacked layout
+const SIM_PAINT_DELAY_MS  = 30;      // tiny gap so "Running…" paints before the blocking compute
+const AUTORUN_DEBOUNCE_MS = 600;     // wait after the last input change before re-running
+const SIDEBAR_TRANSITION_MS = 280;   // matches the CSS sidebar collapse transition
+const CASH_PCT             = 0.05;   // fixed cash allocation (or less if stocks >= 95%)
+const GUYTON_UPPER_TRIGGER = 1.20;   // withdrawal rate spike that prompts a spending cut
+const GUYTON_LOWER_TRIGGER = 0.80;   // withdrawal rate dip that prompts a spending raise
+const GUYTON_ADJUSTMENT    = 0.10;   // ±10% spending adjustment when triggers fire
+const SUCCESS_TIERS = [               // ordered high→low; first match wins
+  { tier: 'great', min: 0.90 },
+  { tier: 'good',  min: 0.80 },
+  { tier: 'warn',  min: 0.65 },
+  { tier: 'bad',   min: 0    },
+];
+
+const SELECT_HINTS = {
+  inflationMode: {
+    historical: "Each year randomly samples a real historical year's CPI — capturing everything from 1932's −10% deflation to 1947's +14% spike. Best for realistic scenario analysis.",
+    fixed:      "Every simulation applies the same inflation rate year after year. Good for stress-testing a specific assumption (e.g. 'what if inflation stays at 4% forever?').",
+  },
+  strategy: {
+    constant:  "You spend the same purchasing power every year. Your nominal dollar amount rises with inflation (e.g. $80K today → $108K in 10 years at 3% inflation). Simple, but forces cuts if markets crash.",
+    flexible:  "Start with inflation-adjusted spending, but cut 10% if your withdrawal rate gets too high (portfolio stressed), and increase 10% if it's unusually low (portfolio thriving). More realistic for most retirees — and significantly boosts success probability.",
+    pct:       "Withdraw a fixed percentage of whatever your portfolio is worth that year. Spending swings with markets — lean years have less, boom years have more. You can never technically deplete to zero, but a bad run could shrink spending drastically.",
+  },
+  numSims: {
+    "1000":  "Fast — results update in under a second. Some run-to-run variability (~±1%). Good for quick exploration.",
+    "5000":  "The sweet spot. Accurate enough for financial decisions with minimal run-to-run variance. Runs in 1–2 seconds.",
+    "10000": "Maximum precision. Results are very stable between runs. Takes 3–5 seconds on most machines.",
+  },
+  samplingMethod: {
+    bootstrap:  "Each year randomly draws a complete historical year (1926–2024) — you get that year's actual stock return, bond return, and inflation together. Preserves real-world correlations (like 2008, when stocks fell 37% and bonds rallied). Recommended.",
+    parametric: "Generates synthetic returns using historical mean and standard deviation, assuming a normal distribution. Slightly faster and ignores extreme outliers like the Great Depression. Tends to overstate success probability slightly.",
+  },
+};
+
+const STRATEGY_NAMES_LONG = {
+  constant: 'constant real spending',
+  flexible: 'Guyton-Klinger guardrails',
+  pct: 'a fixed % annual withdrawal', // pct gets a custom version inline (with the rate)
+};
+const STRATEGY_NAMES_SHORT = { constant: 'constant real', flexible: 'Guyton-Klinger', pct: 'fixed %' };
+
+// Colors for the fan chart tooltip swatches. The actual on-chart datasets use
+// transparent borders + faded fills (for fill-anchor semantics), which Chart.js
+// can't pick a tooltip box color from. These are solid stand-ins, with opacity
+// matching each band's visual weight on the chart.
+const TOOLTIP_SWATCH = {
+  '90th pct': '#4f8ef770',
+  '75th pct': '#4f8ef7aa',
+  'Median':   '#4f8ef7',
+  '25th pct': '#4f8ef7aa',
+  '10th pct': '#4f8ef770',
+};
+
+// Custom Chart.js tooltip positioner: anchor the tooltip caret to the Median
+// line at the hovered x, so the arrow visually comes out of the median.
+// Note: positioners run with `this` bound to the Tooltip instance, which has
+// a `chart` reference — that's how we resolve the dataset label.
+Chart.Tooltip.positioners.medianAnchor = function (items, eventPosition) {
+  const chart = this && this.chart;
+  for (const item of items) {
+    const label = chart && chart.data.datasets[item.datasetIndex] && chart.data.datasets[item.datasetIndex].label;
+    if (label === 'Median') return { x: item.element.x, y: item.element.y };
+  }
+  return { x: eventPosition.x, y: eventPosition.y };
+};
+
+// ═════════════════════════════════════════════════════════
+// STATE
+// ═════════════════════════════════════════════════════════
+const state = {
+  spendFreq: 'monthly',           // 'monthly' | 'annual' — affects only how the spending text input is interpreted
+  autoRunEnabled: true,           // mirrors the auto-run toggle
+  autoRunTimer: null,
+  hasResults: false,              // once true, input changes can trigger auto-runs
+  charts: { fan: null, hist: null },
+};
+
+// ═════════════════════════════════════════════════════════
+// SMALL HELPERS
+// ═════════════════════════════════════════════════════════
+const $ = id => document.getElementById(id);
+
+const sum   = arr => arr.reduce((a, b) => a + b, 0);
+const mean  = arr => sum(arr) / arr.length;
+const std   = arr => { const m = mean(arr); return Math.sqrt(mean(arr.map(x => (x - m) ** 2))); };
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+const percentile = (sortedAsc, p) =>
+  sortedAsc[clamp(Math.floor((p / 100) * (sortedAsc.length - 1)), 0, sortedAsc.length - 1)];
+
+// Box-Muller transform for normal-distributed samples (used by parametric sampling)
+function randn() {
+  const u = 1 - Math.random(), v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+// Compact dollar format for chart axis ticks: $1.2M, $400K, $-50
+function fmt$(n) {
+  if (n == null || isNaN(n)) return '—';
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(0)}K`;
+  return `$${n.toFixed(0)}`;
+}
+
+// Full comma-formatted dollar amount: $1,234,567
+function fmtComma$(n) {
+  if (n == null || isNaN(n)) return '—';
+  return (n < 0 ? '-' : '') + '$' + Math.abs(Math.round(n)).toLocaleString('en-US');
+}
+
+const parseDollarInput = id => parseFloat($(id).value.replace(/,/g, '').trim()) || 0;
+
+const isMobile = () => window.matchMedia(`(max-width: ${BREAKPOINT_MOBILE}px)`).matches;
+
+function successTier(rate) {
+  return SUCCESS_TIERS.find(t => rate >= t.min).tier;
+}
+
+// ═════════════════════════════════════════════════════════
+// INPUT FORMATTING
+// ═════════════════════════════════════════════════════════
+
+// Re-format the dollar text input with commas as the user types. Uses regex
+// insertion (not parseInt) so intermediate states like "0,000" are preserved
+// while the user is mid-edit instead of collapsing to "0".
+function formatInputComma(el) {
+  const cursor = el.selectionStart;
+  const prevLen = el.value.length;
+  const raw = el.value.replace(/[^0-9]/g, '');
+  if (raw === '') { el.value = ''; return; }
+  const formatted = raw.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  el.value = formatted;
+  const newCursor = Math.max(0, cursor + (formatted.length - prevLen));
+  el.setSelectionRange(newCursor, newCursor);
+}
+
+// On blur, collapse leading zeros (e.g. "020,000" → "20,000").
+function normalizeInputComma(el) {
+  const raw = el.value.replace(/[^0-9]/g, '');
+  el.value = raw === '' ? '' : parseInt(raw, 10).toLocaleString('en-US');
+}
+
+// Backspace/Delete onto a comma normally does nothing visible — the browser
+// deletes the comma, then formatInputComma immediately re-inserts it. Intercept
+// those keystrokes so they delete the digit on the other side of the comma.
+function onDollarKeyDown(el, e) {
+  if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+  if (el.selectionStart !== el.selectionEnd) return;       // selection — let default handle it
+
+  const pos = el.selectionStart;
+  const isBackspace = e.key === 'Backspace';
+  const targetIdx = isBackspace ? pos - 1 : pos;
+  if (targetIdx < 0 || targetIdx >= el.value.length) return;
+  if (el.value[targetIdx] !== ',') return;                 // not deleting a comma — default is fine
+
+  e.preventDefault();
+
+  // Translate the display-position cursor into raw-digit space, drop one digit,
+  // re-format, then re-anchor the cursor.
+  const digitsBeforeCursor = countDigits(el.value, 0, pos);
+  const raw = el.value.replace(/[^0-9]/g, '');
+  const cutDigitIdx = isBackspace ? digitsBeforeCursor - 1 : digitsBeforeCursor;
+  if (cutDigitIdx < 0 || cutDigitIdx >= raw.length) return;
+
+  const newRaw = raw.slice(0, cutDigitIdx) + raw.slice(cutDigitIdx + 1);
+  el.value = newRaw === '' ? '' : newRaw.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  setCursorAtDigit(el, cutDigitIdx);
+  scheduleAutoRun();
+}
+
+function countDigits(s, start, end) {
+  let n = 0;
+  for (let i = start; i < end; i++) if (s.charCodeAt(i) >= 48 && s.charCodeAt(i) <= 57) n++;
+  return n;
+}
+
+// Move the cursor to the display position that sits just before the Nth digit.
+function setCursorAtDigit(el, digitIdx) {
+  const s = el.value;
+  let count = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (count === digitIdx) { el.setSelectionRange(i, i); return; }
+    if (s.charCodeAt(i) >= 48 && s.charCodeAt(i) <= 57) count++;
+  }
+  el.setSelectionRange(s.length, s.length);
+}
+
+// ═════════════════════════════════════════════════════════
+// UI HANDLERS
+// ═════════════════════════════════════════════════════════
+
+function updateSelectHint(selectId, hintId) {
+  const val = $(selectId).value;
+  $(hintId).textContent = (SELECT_HINTS[selectId] || {})[val] || '';
+}
+
+function onInflationModeChange() {
+  $('fixedInflationField').style.display = $('inflationMode').value === 'fixed' ? 'block' : 'none';
+  updateSelectHint('inflationMode', 'inflationModeHint');
+}
+
+function onStrategyChange() {
+  $('pctField').style.display = $('strategy').value === 'pct' ? 'block' : 'none';
+  updateSelectHint('strategy', 'strategyHint');
+}
+
+function updateYearsDisplay() {
+  const yrs = Math.max(0, (parseInt($('endAge').value) || 0) - (parseInt($('startAge').value) || 0));
+  $('yearsDisplay').textContent = `= ${yrs} year${yrs === 1 ? '' : 's'} in retirement`;
+}
+
+// Cash is fixed at 5% (or less when stocks ≥ 95%); bonds fill the remainder.
+// The bonds slider is display-only — set programmatically here.
+function syncAllocation(stocksRaw) {
+  const stocks = parseInt(stocksRaw);
+  const cash   = Math.min(5, 100 - stocks);
+  const bonds  = 100 - stocks - cash;
+  $('stocksVal').textContent = stocks + '%';
+  $('bondsVal').textContent  = bonds  + '%';
+  $('cashVal').textContent   = cash   + '%';
+  $('bondsRange').value = bonds;
+}
+
+function setSpendFreq(freq) {
+  if (state.spendFreq === freq) return;
+  const el = $('spending');
+  const current = parseFloat(el.value.replace(/,/g, '')) || 0;
+  el.value = (freq === 'annual' ? Math.round(current * 12) : Math.round(current / 12)).toLocaleString('en-US');
+  state.spendFreq = freq;
+  $('freqMonthly').classList.toggle('active', freq === 'monthly');
+  $('freqAnnual').classList.toggle('active', freq === 'annual');
+  $('spendLabel').textContent = freq === 'monthly' ? 'Monthly Spending' : 'Annual Spending';
+}
+
+// Fires on any persisted-input change. Schedules an auto-run after a debounce,
+// but only after the very first run (so first-load edits don't kick off a sim).
+function scheduleAutoRun() {
+  const btn = $('runBtn');
+  if (!state.hasResults) return;
+  if (state.autoRunEnabled) {
+    clearTimeout(state.autoRunTimer);
+    state.autoRunTimer = setTimeout(runSimulation, AUTORUN_DEBOUNCE_MS);
+  } else {
+    btn.classList.add('stale');
+    btn.textContent = 'Run Simulation · inputs changed';
+  }
+}
+
+function toggleExplainer() {
+  $('explainerCard').classList.toggle('collapsed');
+}
+
+function toggleMobileSidebar() {
+  const body = $('sidebarBody');
+  const btn  = $('sidebarToggle');
+  const collapsed = !body.classList.contains('collapsed');
+  body.classList.toggle('collapsed', collapsed);
+  btn.classList.toggle('collapsed', collapsed);
+  btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  $('sidebarToggleLabel').textContent = collapsed ? 'Show inputs' : 'Hide inputs';
+  if (!collapsed) setTimeout(() => btn.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+}
+
+function toggleDesktopSidebar() {
+  const app = document.querySelector('.app');
+  const hidden = !app.classList.contains('sidebar-hidden');
+  app.classList.toggle('sidebar-hidden', hidden);
+  updateSidebarHandle(hidden);
+  try { localStorage.setItem('sidebarHidden', hidden ? '1' : '0'); } catch (_) {}
+  // Let Chart.js redraw at the new container width after the CSS transition completes
+  setTimeout(() => Object.values(state.charts).forEach(c => c && c.resize()), SIDEBAR_TRANSITION_MS);
+}
+
+// Sync the drawer handle's icon and label with the current sidebar state.
+function updateSidebarHandle(sidebarHidden) {
+  const handle = $('sidebarHandle');
+  handle.textContent = sidebarHidden ? '▶' : '◀';
+  const action = sidebarHidden ? 'Show sidebar' : 'Hide sidebar';
+  handle.setAttribute('aria-label', action);
+  handle.setAttribute('title', action);
+}
+
+// ═════════════════════════════════════════════════════════
+// SIMULATION
+// ═════════════════════════════════════════════════════════
+
+function readInputs() {
+  const startAge = parseInt($('startAge').value) || 45;
+  const endAge   = parseInt($('endAge').value)   || 95;
+  const stocks   = parseInt($('stocksRange').value) / 100;
+  const cash     = Math.min(CASH_PCT, 1 - stocks);
+  const bonds    = 1 - stocks - cash;
+
+  const spendingRaw = parseDollarInput('spending');
+  const spending = state.spendFreq === 'monthly' ? spendingRaw * 12 : spendingRaw;
+  const income = parseDollarInput('income');
+
+  return {
+    portfolio:  parseDollarInput('portfolio'),
+    spending, income,
+    netSpend:   Math.max(0, spending - income),
+    startAge, endAge,
+    years:      Math.max(1, endAge - startAge),
+    stocks, bonds, cash,
+    fees:       parseFloat($('feesRange').value) / 100,
+    inflMode:   $('inflationMode').value,
+    inflFixed:  parseFloat($('fixedInflRange').value) / 100,
+    strategy:   $('strategy').value,
+    pctW:       parseFloat($('pctRange').value) / 100,
+    numSims:    parseInt($('numSims').value),
+    sampMethod: $('samplingMethod').value,
+  };
+}
+
+function computeReturnStats() {
+  const stockReturns = HISTORICAL.map(r => r[1] / 100);
+  const bondReturns  = HISTORICAL.map(r => r[2] / 100);
+  const inflReturns  = HISTORICAL.map(r => r[3] / 100);
+  return {
+    stockMean: mean(stockReturns), stockStd: std(stockReturns),
+    bondMean:  mean(bondReturns),  bondStd:  std(bondReturns),
+    inflMean:  mean(inflReturns),  inflStd:  std(inflReturns),
+  };
+}
+
+function sampleYear(p, stats) {
+  if (p.sampMethod === 'bootstrap') {
+    const row = HISTORICAL[Math.floor(Math.random() * HISTORICAL.length)];
+    return {
+      sr: row[1] / 100,
+      br: row[2] / 100,
+      ir: p.inflMode === 'fixed' ? p.inflFixed : row[3] / 100,
+    };
+  }
+  return {
+    sr: stats.stockMean + stats.stockStd * randn(),
+    br: stats.bondMean  + stats.bondStd  * randn(),
+    ir: p.inflMode === 'fixed' ? p.inflFixed : (stats.inflMean + stats.inflStd * randn()),
+  };
+}
+
+// Withdrawal logic per strategy. `ctx` carries mutable state (annualSpend) so
+// constant/flexible strategies can compound inflation across years.
+function nextWithdrawal(p, ctx) {
+  if (p.strategy === 'pct') return ctx.bal * p.pctW;
+
+  ctx.annualSpend *= (1 + ctx.ir);
+  if (p.strategy === 'flexible') {
+    const initialRate = p.netSpend / p.portfolio;
+    const currentRate = ctx.annualSpend / ctx.bal;
+    if (currentRate > initialRate * GUYTON_UPPER_TRIGGER) ctx.annualSpend *= (1 - GUYTON_ADJUSTMENT);
+    if (currentRate < initialRate * GUYTON_LOWER_TRIGGER) ctx.annualSpend *= (1 + GUYTON_ADJUSTMENT);
+  }
+  return ctx.annualSpend;
+}
+
+function runMonteCarlo(p) {
+  const stats = computeReturnStats();
+  const paths = [];
+  const finalVals = [];
+  let successCount = 0;
+
+  for (let sim = 0; sim < p.numSims; sim++) {
+    const ctx = { bal: p.portfolio, annualSpend: p.netSpend, ir: 0 };
+    const path = [ctx.bal];
+    let failed = false;
+
+    for (let yr = 0; yr < p.years; yr++) {
+      const { sr, br, ir } = sampleYear(p, stats);
+      ctx.ir = ir;
+
+      const portReturn = p.stocks * sr + p.bonds * br - p.fees;
+      const withdrawal = nextWithdrawal(p, ctx);
+      ctx.bal = ctx.bal * (1 + portReturn) - withdrawal;
+
+      if (ctx.bal <= 0) {
+        failed = true;
+        // Pad the rest of the path with zeros so the per-year percentile math lines up
+        for (let r = yr + 1; r <= p.years; r++) path.push(0);
+        break;
+      }
+      path.push(ctx.bal);
+    }
+
+    if (!failed) successCount++;
+    paths.push(path);
+    finalVals.push(Math.max(0, path[p.years]));
+  }
+
+  return { paths, finalVals, successCount, stats };
+}
+
+function summarize(p, sim) {
+  const { paths, finalVals, successCount, stats } = sim;
+  const successRate = successCount / p.numSims;
+
+  // Solvent count per year (used by the success-by-year chart)
+  const solventByYear = Array(p.years + 1).fill(0);
+  solventByYear[0] = p.numSims;
+  for (let s = 0; s < p.numSims; s++)
+    for (let y = 1; y <= p.years; y++)
+      if (paths[s][y] > 0) solventByYear[y]++;
+
+  // Per-year percentile bands (used by the fan chart)
+  const bands = { p10: [], p25: [], p50: [], p75: [], p90: [] };
+  for (let yr = 0; yr <= p.years; yr++) {
+    const sorted = paths.map(path => path[yr] || 0).sort((a, b) => a - b);
+    bands.p10.push(percentile(sorted, 10));
+    bands.p25.push(percentile(sorted, 25));
+    bands.p50.push(percentile(sorted, 50));
+    bands.p75.push(percentile(sorted, 75));
+    bands.p90.push(percentile(sorted, 90));
+  }
+
+  const finalSorted = [...finalVals].sort((a, b) => a - b);
+
+  // Find the first age where the running success rate dips below 80%
+  let dropAge = null;
+  for (let yr = 1; yr <= p.years; yr++) {
+    if (solventByYear[yr] / p.numSims < 0.80) { dropAge = p.startAge + yr; break; }
+  }
+
+  return {
+    successRate, successCount, bands, stats,
+    finalSorted, finalVals, paths,
+    failedPaths: paths.filter(path => path[p.years] === 0).slice(0, 5),
+    safeRate:    p.portfolio > 0 ? p.netSpend / p.portfolio : 0,
+    medianFinal: percentile(finalSorted, 50),
+    p10Final:    percentile(finalSorted, 10),
+    p90Final:    percentile(finalSorted, 90),
+    labels:      Array.from({ length: p.years + 1 }, (_, i) => String(p.startAge + i)),
+    dropAge,
+    tier:        successTier(successRate),
+  };
+}
+
+// ═════════════════════════════════════════════════════════
+// RENDERING
+// ═════════════════════════════════════════════════════════
+
+function renderInterpretation(p, r) {
+  const tier = r.tier;
+  const successPct = (r.successRate * 100).toFixed(1);
+  const wdPct = (r.safeRate * 100).toFixed(2);
+  const allocationLabel = `${Math.round(p.stocks*100)}% stocks / ${Math.round(p.bonds*100)}% bonds`;
+
+  $('interpCard').className = `card interp-card ${tier}`;
+
+  const headlines = {
+    great: "Your plan is on solid ground.",
+    good:  "Your plan looks good with some room to stress-test.",
+    warn:  "Your plan has meaningful risk — consider adjustments.",
+    bad:   "Your plan needs attention — high probability of running out.",
+  };
+  $('interpHeadline').textContent = headlines[tier];
+
+  const wdBenchmark = r.safeRate < 0.03 ? 'well below the traditional 4% guideline — very conservative'
+                    : r.safeRate < 0.04 ? 'just under the 4% guideline — generally considered safe'
+                    : r.safeRate < 0.05 ? 'above the classic 4% rule — slightly aggressive'
+                    : 'significantly above the 4% rule — elevated risk';
+
+  const strategyName = p.strategy === 'pct'
+    ? `a fixed ${(p.pctW * 100).toFixed(1)}% annual withdrawal`
+    : STRATEGY_NAMES_LONG[p.strategy];
+
+  let body = `In <strong>${p.numSims.toLocaleString()} simulated retirements</strong> drawn from ${HISTORICAL.length} years of real market history,
+              your money lasts the full <strong>${p.years} years</strong> in <span class="hi">${successPct}%</span> of scenarios.`;
+
+  if (p.income > 0) {
+    body += ` Your <strong>${fmtComma$(p.income)}/yr</strong> in guaranteed income reduces your portfolio draw to <strong>${fmtComma$(p.netSpend)}/yr</strong>.`;
+  }
+
+  body += ` That's a <span class="hi">${wdPct}% withdrawal rate</span> — ${wdBenchmark}.`;
+
+  if (r.successRate >= 0.90) {
+    body += ` Even in a bad-luck scenario (bottom 10%), you'd end with roughly <strong>${fmtComma$(r.p10Final)}</strong>.
+             In a typical scenario, you'd end with <strong>${fmtComma$(r.medianFinal)}</strong>.`;
+  } else if (r.successRate >= 0.80) {
+    body += ` In a typical scenario you end with <strong>${fmtComma$(r.medianFinal)}</strong>,
+             but in a rough market sequence your portfolio could be depleted before age <strong>${r.dropAge || (p.startAge + p.years)}</strong>.`;
+  } else {
+    if (r.dropAge) {
+      body += ` The median simulation still survives, but a large portion of bad-luck scenarios run dry around <strong>age ${r.dropAge}</strong>.`;
+    }
+    const suggestedCut = Math.round(p.netSpend * 0.85 / 1000) * 1000;
+    body += ` Consider reducing annual spending by <strong>10–15%</strong> (to ~${fmtComma$(suggestedCut)}/yr net) or increasing your portfolio before retiring.`;
+  }
+
+  body += ` You're using <strong>${strategyName}</strong> with a <strong>${allocationLabel}</strong> portfolio.`;
+
+  if (p.strategy === 'constant' && r.successRate < 0.90) {
+    body += ` <em>Tip: switching to Guyton-Klinger guardrails typically adds 5–10 percentage points to success probability.</em>`;
+  }
+
+  const inflationDesc = p.inflMode === 'fixed'
+    ? `a fixed <strong>${(p.inflFixed * 100).toFixed(1)}%</strong> rate`
+    : 'real historical CPI data';
+  body += ` <span class="interp-note">All dollar amounts shown are in <strong>today's purchasing power</strong>. The simulation inflates your spending each year using ${inflationDesc}, so nominal dollars in later years will be higher than what you see here.</span>`;
+
+  $('interpBody').innerHTML = body;
+
+  // Pills summarize the headline numbers
+  const pills = [];
+  const wdCls = r.safeRate <= 0.04 ? 'pill-green'
+               : r.successRate >= 0.80 ? 'pill-yellow'
+               : 'pill-red';
+  pills.push({ text: `${wdPct}% withdrawal rate`, cls: wdCls });
+  pills.push({ text: allocationLabel, cls: 'pill-blue' });
+  pills.push({ text: `${p.years}-year horizon`, cls: 'pill-blue' });
+  if (p.income > 0) pills.push({ text: `${fmtComma$(p.income)}/yr guaranteed income`, cls: 'pill-green' });
+  if (p.fees > 0.005) pills.push({ text: `${(p.fees * 100).toFixed(2)}% fees/yr`, cls: p.fees > 0.01 ? 'pill-red' : 'pill-yellow' });
+
+  $('interpPills').innerHTML = pills.map(p => `<span class="interp-pill ${p.cls}">${p.text}</span>`).join('');
+}
+
+function renderKpis(p, r) {
+  const successPct = (r.successRate * 100).toFixed(1);
+  $('kpiRow').innerHTML = `
+    <div class="kpi">
+      <div class="kpi-label">Probability of Success</div>
+      <div class="kpi-value kpi-success ${r.tier}">${successPct}%</div>
+      <div class="kpi-sub">${r.successCount.toLocaleString()} of ${p.numSims.toLocaleString()} sims solvent</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Withdrawal Rate</div>
+      <div class="kpi-value">${(r.safeRate * 100).toFixed(2)}%</div>
+      <div class="kpi-sub">Net draw ÷ starting portfolio</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Median Final Balance</div>
+      <div class="kpi-value">${fmtComma$(r.medianFinal)}</div>
+      <div class="kpi-sub">Age ${p.startAge + p.years} · typical outcome</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">10th Pct. Final Balance</div>
+      <div class="kpi-value">${fmtComma$(r.p10Final)}</div>
+      <div class="kpi-sub">Bad-luck scenario floor</div>
+    </div>`;
+}
+
+function renderDataNote(p, r) {
+  const { stockMean, stockStd, bondMean, bondStd, inflMean } = r.stats;
+  const samplingLabel = p.sampMethod === 'bootstrap' ? 'historical bootstrap' : 'parametric';
+  const incomeTail = p.income > 0
+    ? ` · income offset <strong>${fmtComma$(p.income)}</strong> → net draw <strong>${fmtComma$(p.netSpend)}</strong>`
+    : '';
+  $('dataNoteEl').innerHTML = `<p>
+    <strong>Data:</strong> ${HISTORICAL.length} years (${HISTORICAL[0][0]}–${HISTORICAL[HISTORICAL.length-1][0]}) ·
+    S&P 500 avg <strong>${(stockMean*100).toFixed(1)}%</strong> ± ${(stockStd*100).toFixed(1)}% std dev ·
+    Bonds avg <strong>${(bondMean*100).toFixed(1)}%</strong> ± ${(bondStd*100).toFixed(1)}% ·
+    Avg inflation <strong>${(inflMean*100).toFixed(1)}%</strong> ·
+    Sampling: <strong>${samplingLabel}</strong> ·
+    Strategy: <strong>${STRATEGY_NAMES_SHORT[p.strategy]}</strong>${incomeTail}
+  </p>`;
+}
+
+function renderCharts(p, r) {
+  renderFanChart(r);
+  renderHistogram(r);
+}
+
+function renderFanChart(r) {
+  if (state.charts.fan) state.charts.fan.destroy();
+  const failedDatasets = r.failedPaths.map(fp => ({
+    label: '__failed', data: fp,
+    borderColor: '#f8717140', borderWidth: 1, pointRadius: 0, tension: 0.3, fill: false,
+  }));
+  state.charts.fan = new Chart($('fanChart').getContext('2d'), {
+    type: 'line',
+    data: { labels: r.labels, datasets: [
+      { label: '90th pct', data: r.bands.p90, borderColor: 'transparent', backgroundColor: '#4f8ef715', fill: '+1', pointRadius: 0, tension: 0.3 },
+      { label: '10th pct', data: r.bands.p10, borderColor: 'transparent', backgroundColor: '#4f8ef715', fill: false, pointRadius: 0 },
+      { label: '75th pct', data: r.bands.p75, borderColor: 'transparent', backgroundColor: '#4f8ef730', fill: '+1', pointRadius: 0, tension: 0.3 },
+      { label: '25th pct', data: r.bands.p25, borderColor: 'transparent', backgroundColor: '#4f8ef730', fill: false, pointRadius: 0 },
+      { label: 'Median',   data: r.bands.p50, borderColor: '#4f8ef7', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, tension: 0.3, fill: false },
+      ...failedDatasets,
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index', intersect: false, position: 'medianAnchor',
+          backgroundColor: 'rgba(22, 27, 39, 0.97)',
+          titleColor: '#f0f4ff', titleFont: { size: 13, weight: '600' }, titleMarginBottom: 8,
+          bodyColor: '#e2e8f0', bodyFont: { size: 12 }, bodySpacing: 5,
+          borderColor: '#2d3748', borderWidth: 1, cornerRadius: 8,
+          padding: 12, boxPadding: 6,
+          filter: ctx => ctx.dataset.label !== '__failed',
+          itemSort: (a, b) => b.raw - a.raw,
+          callbacks: {
+            title: ctx => `Age ${ctx[0].label}`,
+            label: ctx => ` ${ctx.dataset.label}: ${fmtComma$(ctx.raw)}`,
+            // Override box colors — most datasets have borderColor: 'transparent' for fill
+            // semantics, which renders as empty/white swatches by default.
+            labelColor: ctx => {
+              const c = TOOLTIP_SWATCH[ctx.dataset.label] || '#4f8ef7';
+              return { borderColor: c, backgroundColor: c };
+            }
+          }
+        }
+      },
+      scales: {
+        x: { grid: { color: '#1e2736' }, ticks: { color: '#64748b', font: { size: 11 } } },
+        y: { grid: { color: '#1e2736' }, ticks: { color: '#64748b', font: { size: 11 }, callback: v => fmt$(v) } }
+      }
+    }
+  });
+}
+
+function renderHistogram(r) {
+  if (state.charts.hist) state.charts.hist.destroy();
+  const maxVal = percentile(r.finalSorted, 95);
+  const bins = 30;
+  const binSize = maxVal / bins;
+  const counts = Array(bins).fill(0);
+  r.finalVals.forEach(v => { counts[Math.min(bins - 1, Math.floor(v / binSize))]++; });
+  const barColors = counts.map((_, i) => (i + 0.5) * binSize <= 0 ? '#f87171' : '#4f8ef7');
+
+  state.charts.hist = new Chart($('histChart').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: counts.map((_, i) => fmt$(i * binSize)),
+      datasets: [{ data: counts, backgroundColor: barColors, borderRadius: 2, borderSkipped: false }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `${ctx.raw} simulations` } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 8 } },
+        y: { grid: { color: '#1e2736' }, ticks: { color: '#64748b', font: { size: 11 } } }
+      }
+    }
+  });
+}
+
+const SNAPSHOT_PERCENTILES = [
+  { p:  5, label: '5th',    desc: 'Worst case' },
+  { p: 10, label: '10th',   desc: 'Bad luck' },
+  { p: 25, label: '25th',   desc: 'Below median' },
+  { p: 50, label: 'Median', desc: 'Typical outcome', highlight: true },
+  { p: 75, label: '75th',   desc: 'Above median' },
+  { p: 90, label: '90th',   desc: 'Good luck' },
+  { p: 95, label: '95th',   desc: 'Best case' },
+];
+
+const SNAPSHOT_WARN_THRESHOLD = 600_000;
+
+function snapshotCellClass(val) {
+  if (val <= 0) return 'cell-fail';
+  if (val < SNAPSHOT_WARN_THRESHOLD) return 'cell-warn';
+  return '';
+}
+
+function renderSnapshotTable(p, r) {
+  $('snapshotSubLabel').innerHTML =
+    `Starting portfolio <strong>${fmtComma$(p.portfolio)}</strong> · ` +
+    `each cell shows the balance at that age and its multiple of the starting portfolio · ` +
+    `yellow = below <strong>${fmtComma$(SNAPSHOT_WARN_THRESHOLD)}</strong> · red = depleted`;
+
+  // Decade markers + the final year if it doesn't land on a decade
+  const snapYears = [];
+  for (let y = 10; y <= p.years; y += 10) snapYears.push(y);
+  if (snapYears[snapYears.length - 1] !== p.years) snapYears.push(p.years);
+
+  const header = snapYears.map(y =>
+    `<th>Age ${p.startAge + y}<br><span class="snapshot-th-sub">Yr ${y}</span></th>`
+  ).join('');
+
+  const rows = SNAPSHOT_PERCENTILES.map(({ p: pct, label, desc, highlight }) => {
+    const cells = snapYears.map(y => {
+      const sorted = r.paths.map(path => path[y] || 0).sort((a, b) => a - b);
+      const val = percentile(sorted, pct);
+      const cellCls = snapshotCellClass(val);
+      const multiple = p.portfolio > 0 ? val / p.portfolio : 0;
+      const inner = val <= 0
+        ? `<div class="cell-primary">—</div><div class="cell-secondary cell-depleted">Depleted</div>`
+        : `<div class="cell-primary">${fmtComma$(val)}</div><div class="cell-secondary">${multiple.toFixed(2)}× start</div>`;
+      return `<td${cellCls ? ` class="${cellCls}"` : ''}>${inner}</td>`;
+    }).join('');
+
+    const rowCls = highlight ? ' class="row-median"' : '';
+    return `<tr${rowCls}>
+      <td class="pct-cell">
+        <div class="pct-label-text">${label}</div>
+        <div class="pct-desc-text">${desc}</div>
+      </td>${cells}
+    </tr>`;
+  }).join('');
+
+  $('snapshotTableEl').innerHTML = `
+    <table class="snapshot-table">
+      <thead><tr><th>Percentile</th>${header}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// One-time side effects that should fire after the first run renders.
+// Auto-collapses the explainer, and on mobile auto-collapses the inputs
+// and scrolls results into view so the user lands on the answer.
+function applyPostRunUx() {
+  const explainer = $('explainerCard');
+  if (!explainer.dataset.autoCollapsed) {
+    explainer.classList.add('collapsed');
+    explainer.dataset.autoCollapsed = '1';
+  }
+
+  if (isMobile()) {
+    const body = $('sidebarBody');
+    if (!body.classList.contains('collapsed')) {
+      body.classList.add('collapsed');
+      const btn = $('sidebarToggle');
+      btn.classList.add('collapsed');
+      btn.setAttribute('aria-expanded', 'false');
+      $('sidebarToggleLabel').textContent = 'Show inputs';
+    }
+    setTimeout(() => $('results').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  }
+}
+
+// ═════════════════════════════════════════════════════════
+// SIMULATION ORCHESTRATOR
+// ═════════════════════════════════════════════════════════
+
+function runSimulation() {
+  const btn = $('runBtn');
+  btn.disabled = true;
+  btn.classList.remove('stale');
+  btn.textContent = 'Running…';
+
+  // Defer the (blocking) compute so the "Running…" state has a chance to paint
+  setTimeout(() => {
+    try {
+      const p = readInputs();
+      const sim = runMonteCarlo(p);
+      const r = summarize(p, sim);
+
+      $('emptyState').style.display = 'none';
+      $('results').style.display = 'block';
+      $('simCountLabel').textContent = p.numSims.toLocaleString();
+      document.querySelectorAll('.endYearLabel').forEach(el => el.textContent = p.years);
+
+      renderInterpretation(p, r);
+      renderKpis(p, r);
+      renderDataNote(p, r);
+      renderCharts(p, r);
+      renderSnapshotTable(p, r);
+      applyPostRunUx();
+    } catch (e) {
+      console.error(e);
+    }
+    btn.disabled = false;
+    btn.textContent = 'Run Simulation';
+    state.hasResults = true;
+  }, SIM_PAINT_DELAY_MS);
+}
+
+// ═════════════════════════════════════════════════════════
+// EVENT BINDING & INIT
+// ═════════════════════════════════════════════════════════
+
+// Range inputs: each updates a display span (and optionally a side effect) then schedules an auto-run
+const RANGE_BINDINGS = [
+  { id: 'stocksRange',   labelId: 'stocksVal',   decimals: 0, suffix: '%', sideEffect: v => syncAllocation(v) },
+  { id: 'feesRange',     labelId: 'feesVal',     decimals: 2, suffix: '%' },
+  { id: 'fixedInflRange',labelId: 'fixedInflVal',decimals: 1, suffix: '%' },
+  { id: 'pctRange',      labelId: 'pctVal',      decimals: 2, suffix: '%' },
+];
+
+function bindEventHandlers() {
+  // ─── Dollar text inputs ─── live comma formatting + normalize on blur
+  ['portfolio', 'spending', 'income'].forEach(id => {
+    const el = $(id);
+    el.addEventListener('keydown', e => onDollarKeyDown(el, e));
+    el.addEventListener('input', () => { formatInputComma(el); scheduleAutoRun(); });
+    el.addEventListener('blur',  () => normalizeInputComma(el));
+  });
+
+  // ─── Age number inputs
+  ['startAge', 'endAge'].forEach(id => {
+    $(id).addEventListener('input', () => { updateYearsDisplay(); scheduleAutoRun(); });
+  });
+
+  // ─── Ranges with bound display labels
+  RANGE_BINDINGS.forEach(({ id, labelId, decimals, suffix, sideEffect }) => {
+    const el = $(id);
+    el.addEventListener('input', () => {
+      $(labelId).textContent = parseFloat(el.value).toFixed(decimals) + suffix;
+      if (sideEffect) sideEffect(el.value);
+      scheduleAutoRun();
+    });
+  });
+
+  // ─── Selects (the change handler + a hint update)
+  $('inflationMode').addEventListener('change',   () => { onInflationModeChange(); scheduleAutoRun(); });
+  $('strategy').addEventListener('change',        () => { onStrategyChange(); scheduleAutoRun(); });
+  $('numSims').addEventListener('change',         () => { updateSelectHint('numSims', 'numSimsHint'); scheduleAutoRun(); });
+  $('samplingMethod').addEventListener('change',  () => { updateSelectHint('samplingMethod', 'samplingHint'); scheduleAutoRun(); });
+
+  // ─── Buttons & toggles
+  $('runBtn').addEventListener('click', runSimulation);
+  $('autoRunToggle').addEventListener('change', e => {
+    state.autoRunEnabled = e.target.checked;
+    $('runBtn').classList.remove('stale');
+  });
+  $('freqMonthly').addEventListener('click', () => setSpendFreq('monthly'));
+  $('freqAnnual').addEventListener('click',  () => setSpendFreq('annual'));
+  $('explainerHead').addEventListener('click', toggleExplainer);
+  $('sidebarToggle').addEventListener('click', toggleMobileSidebar);
+  $('sidebarHandle').addEventListener('click', toggleDesktopSidebar);
+}
+
+function makeTooltipsKeyboardAccessible() {
+  document.querySelectorAll('.tip-icon').forEach(icon => {
+    icon.setAttribute('tabindex', '0');
+    icon.setAttribute('role', 'button');
+    icon.setAttribute('aria-label', 'Show info');
+  });
+}
+
+function restoreDesktopSidebarCollapsedState() {
+  try {
+    if (localStorage.getItem('sidebarHidden') === '1' && !isMobile()) {
+      document.querySelector('.app').classList.add('sidebar-hidden');
+      updateSidebarHandle(true);
+    }
+  } catch (_) {}
+}
+
+function init() {
+  bindEventHandlers();
+  makeTooltipsKeyboardAccessible();
+  restoreDesktopSidebarCollapsedState();
+  onInflationModeChange();
+  onStrategyChange();
+  updateSelectHint('numSims', 'numSimsHint');
+  updateSelectHint('samplingMethod', 'samplingHint');
+  updateYearsDisplay();
+}
+
+window.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
