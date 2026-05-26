@@ -585,9 +585,9 @@
           <span class="tip-wrap"><span class="tip-icon">i</span><span class="tip-bubble">How many independent retirement scenarios to run. More simulations = more stable results that vary less between runs. 5,000 is a good balance of speed and precision for most purposes.</span></span>
         </div>
         <select id="numSims">
-          <option value="1000">1,000 (fast)</option>
-          <option value="5000" selected>5,000 (recommended)</option>
-          <option value="10000">10,000 (precise)</option>
+          <option value="5000">5,000 (fast)</option>
+          <option value="10000" selected>10,000 (standard)</option>
+          <option value="20000">20,000 (precision)</option>
         </select>
         <div class="select-hint" id="numSimsHint"></div>
       </div>
@@ -781,9 +781,9 @@ const SELECT_HINTS = {
     pct:       "Withdraw a fixed percentage of whatever your portfolio is worth that year. Spending swings with markets — lean years have less, boom years have more. You can never technically deplete to zero, but a bad run could shrink spending drastically.",
   },
   numSims: {
-    "1000":  "Fast — results update in under a second. Some run-to-run variability (~±1%). Good for quick exploration.",
-    "5000":  "The sweet spot. Accurate enough for financial decisions with minimal run-to-run variance. Runs in 1–2 seconds.",
-    "10000": "Maximum precision. Results are very stable between runs. Takes 3–5 seconds on most machines.",
+    "5000":  "Fast — results update in about a second. Slight run-to-run variability (~±0.5%). Good for quick exploration.",
+    "10000": "The sweet spot. Accurate enough for financial decisions with minimal run-to-run variance. Runs in 2–3 seconds.",
+    "20000": "Maximum precision. Results are very stable between runs. Takes 5–8 seconds on most machines.",
   },
   samplingMethod: {
     bootstrap:  "Each year randomly draws a complete historical year (1926–2024) — you get that year's actual stock return, bond return, and inflation together. Preserves real-world correlations (like 2008, when stocks fell 37% and bonds rallied). Recommended.",
