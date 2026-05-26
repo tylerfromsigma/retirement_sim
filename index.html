@@ -287,14 +287,42 @@
      ───────────────────────────────────────────────────────── */
   /* Tablet / small laptop: stack to single column */
   @media (max-width: 900px) {
-    body { height: auto; overflow: auto; }
+    body { height: auto; overflow: auto; padding-top: 60px; }  /* make room for the fixed header */
     .app { grid-template-columns: 1fr; height: auto; overflow: visible; }
     .sidebar-handle { display: none !important; }
-    .sidebar { height: auto; max-height: none; overflow: visible; border-right: none; border-bottom: 1px solid var(--border); padding: 20px; }
-    .sidebar-header { position: static; margin: 0 0 0; padding: 0; border-bottom: none; }
-    .sidebar-body { margin-top: 20px; }
+    .sidebar { height: auto; max-height: none; overflow: visible; border-right: none; padding: 0; }
+
+    /* Fixed top nav bar — title on the left, prominent "Input assumptions" CTA on the right */
+    .sidebar-header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+      height: 60px;
+      display: flex; align-items: center; gap: 12px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      margin: 0; padding: 0 16px;
+    }
+    .sidebar-header-text { flex: 1; min-width: 0; overflow: hidden; }
+    .sidebar-header h1 { font-size: 15px; line-height: 1.2; }
+    .sidebar-header p  { font-size: 11px; margin-top: 2px; line-height: 1.2; }
+
+    .sidebar-body { padding: 20px; border-bottom: 1px solid var(--border); margin-top: 0; }
     .sidebar-body.collapsed { display: none; }
-    .sidebar-toggle { display: flex; }
+
+    /* Prominent CTA — the primary way to access assumptions on mobile.
+       Uses the accent color so it reads as the main action in the nav bar. */
+    .sidebar-toggle {
+      display: flex; width: auto; flex-shrink: 0;
+      margin: 0; padding: 8px 14px;
+      font-size: 12px; font-weight: 600; letter-spacing: -0.1px;
+      background: var(--accent); color: #fff;
+      border: 1px solid var(--accent);
+      box-shadow: 0 2px 6px rgba(79, 142, 247, 0.25);
+    }
+    .sidebar-toggle:hover, .sidebar-toggle:active {
+      background: var(--accent-hover); border-color: var(--accent-hover);
+    }
+    .sidebar-toggle .chev { color: rgba(255,255,255,0.9); font-size: 12px; margin-left: 2px; }
+    .toggle-row { display: none; }  /* auto-run is desktop-only */
     .main { height: auto; overflow: visible; padding: 20px; }
     .kpis { grid-template-columns: repeat(2, 1fr); gap: 12px; }
     .kpi { padding: 14px 16px; }
@@ -319,12 +347,19 @@
 
   /* Phone */
   @media (max-width: 600px) {
-    .sidebar, .main { padding: 16px; }
-    .kpis { grid-template-columns: 1fr; }
-    .kpi-value { font-size: 24px; }
+    .main { padding: 16px; }
+    .sidebar-body { padding: 16px; }
+    .sidebar-header { padding: 0 12px; }
+    .kpis { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .kpi { padding: 12px 14px; }
+    .kpi-value { font-size: 20px; }
+    .kpi-label { font-size: 10px; }
+    .kpi-sub { font-size: 11px; }
     .interp-pills { gap: 6px; }
     .interp-pill { font-size: 10.5px; padding: 2px 8px; }
-    .sidebar-header h1 { font-size: 16px; }
+    .sidebar-header h1 { font-size: 14px; }
+    .sidebar-header p { font-size: 10.5px; }
+    .sidebar-toggle { padding: 6px 10px; font-size: 10.5px; }
     .freq-toggle { margin-left: 0; }
     .lbl-row { flex-wrap: wrap; gap: 6px; }
     .tip-bubble { font-size: 11px; max-width: 260px; }
@@ -341,16 +376,17 @@
 <!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
 <aside class="sidebar">
   <div class="sidebar-header">
-    <h1>Retirement Simulator</h1>
-    <p>Monte Carlo · 100 years of market data</p>
+    <div class="sidebar-header-text">
+      <h1>Retirement Simulator</h1>
+      <p>Monte Carlo · 100 years of market data</p>
+    </div>
+    <button class="sidebar-toggle collapsed" id="sidebarToggle" aria-expanded="false">
+      <span id="sidebarToggleLabel">Input assumptions</span>
+      <span class="chev">▾</span>
+    </button>
   </div>
 
-  <button class="sidebar-toggle" id="sidebarToggle" aria-expanded="true">
-    <span id="sidebarToggleLabel">Hide inputs</span>
-    <span class="chev">▾</span>
-  </button>
-
-  <div class="sidebar-body" id="sidebarBody">
+  <div class="sidebar-body collapsed" id="sidebarBody">
 
     <!-- ─── Portfolio ─── -->
     <div class="section">
@@ -939,7 +975,8 @@ function setSpendFreq(freq) {
 function scheduleAutoRun() {
   const btn = $('runBtn');
   if (!state.hasResults) return;
-  if (state.autoRunEnabled) {
+  // Auto-run is desktop-only — on mobile, only manual Run Simulation triggers a sim.
+  if (state.autoRunEnabled && !isMobile()) {
     clearTimeout(state.autoRunTimer);
     state.autoRunTimer = setTimeout(runSimulation, AUTORUN_DEBOUNCE_MS);
   } else {
@@ -959,8 +996,11 @@ function toggleMobileSidebar() {
   body.classList.toggle('collapsed', collapsed);
   btn.classList.toggle('collapsed', collapsed);
   btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  $('sidebarToggleLabel').textContent = collapsed ? 'Show inputs' : 'Hide inputs';
-  if (!collapsed) setTimeout(() => btn.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  $('sidebarToggleLabel').textContent = collapsed ? 'Input assumptions' : 'Hide';
+  setTimeout(() => {
+    if (collapsed) window.scrollTo({ top: 0, behavior: 'smooth' });
+    else btn.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 50);
 }
 
 function toggleDesktopSidebar() {
@@ -1414,9 +1454,11 @@ function applyPostRunUx() {
       const btn = $('sidebarToggle');
       btn.classList.add('collapsed');
       btn.setAttribute('aria-expanded', 'false');
-      $('sidebarToggleLabel').textContent = 'Show inputs';
+      $('sidebarToggleLabel').textContent = 'Input assumptions';
     }
-    setTimeout(() => $('results').scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    // Scroll to absolute page top — scrollIntoView would put the element at
+    // y=0 of the viewport, where the 60px fixed header would cover it.
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
   }
 }
 
