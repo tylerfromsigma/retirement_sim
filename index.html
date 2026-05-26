@@ -307,9 +307,9 @@
 
     .sidebar-body { padding: 20px; border-bottom: 1px solid var(--border); margin-top: 0; }
     .sidebar-body.collapsed { display: none; }
+    .empty { display: none; }  /* placeholder text isn't useful on mobile */
 
-    /* Prominent CTA — the primary way to access assumptions on mobile.
-       Uses the accent color so it reads as the main action in the nav bar. */
+    /* Prominent CTA in the fixed nav bar — toggles the assumptions menu. */
     .sidebar-toggle {
       display: flex; width: auto; flex-shrink: 0;
       margin: 0; padding: 8px 14px;
@@ -322,7 +322,16 @@
       background: var(--accent-hover); border-color: var(--accent-hover);
     }
     .sidebar-toggle .chev { color: rgba(255,255,255,0.9); font-size: 12px; margin-left: 2px; }
+    /* Pulse to draw the eye until the user has tapped it at least once */
+    .sidebar-toggle:not(.seen) {
+      animation: cta-button-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes cta-button-pulse {
+      0%, 100% { box-shadow: 0 2px 6px rgba(79,142,247,0.25); }
+      50%      { box-shadow: 0 2px 18px rgba(79,142,247,0.7); }
+    }
     .toggle-row { display: none; }  /* auto-run is desktop-only */
+
     .main { height: auto; overflow: visible; padding: 20px; }
     .kpis { grid-template-columns: repeat(2, 1fr); gap: 12px; }
     .kpi { padding: 14px 16px; }
@@ -381,7 +390,7 @@
       <p>Monte Carlo · 100 years of market data</p>
     </div>
     <button class="sidebar-toggle collapsed" id="sidebarToggle" aria-expanded="false">
-      <span id="sidebarToggleLabel">Input assumptions</span>
+      <span id="sidebarToggleLabel">Run Simulation</span>
       <span class="chev">▾</span>
     </button>
   </div>
@@ -641,7 +650,7 @@
 
   <div class="empty" id="emptyState">
     <h2>Configure &amp; Run</h2>
-    <p>Set your inputs on the left and click Run Simulation.</p>
+    <p>Set your inputs on the left and tap Run Simulation.</p>
   </div>
 
   <div id="results" style="display:none">
@@ -809,6 +818,10 @@ const state = {
   autoRunTimer: null,
   hasResults: false,              // once true, input changes can trigger auto-runs
   charts: { fan: null, hist: null },
+  // True when the mobile assumptions menu opened while the explainer was expanded —
+  // we collapsed the explainer to make room and should restore it if the user
+  // closes the menu without running.
+  explainerCollapsedForInputs: false,
 };
 
 // ═════════════════════════════════════════════════════════
@@ -995,13 +1008,29 @@ function toggleMobileSidebar() {
   const collapsed = !body.classList.contains('collapsed');
   body.classList.toggle('collapsed', collapsed);
   btn.classList.toggle('collapsed', collapsed);
+  btn.classList.add('seen');  // disables the attention-grabbing pulse animation
   btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  $('sidebarToggleLabel').textContent = collapsed ? 'Input assumptions' : 'Hide';
+  $('sidebarToggleLabel').textContent = collapsed ? 'Run Simulation' : 'Hide';
+
+  // Collapse the explainer when opening the inputs to make room.
+  // If the user closes the inputs without running, restore it.
+  const explainer = $('explainerCard');
+  if (!collapsed) {
+    if (!explainer.classList.contains('collapsed')) {
+      explainer.classList.add('collapsed');
+      state.explainerCollapsedForInputs = true;
+    }
+  } else if (state.explainerCollapsedForInputs) {
+    explainer.classList.remove('collapsed');
+    state.explainerCollapsedForInputs = false;
+  }
+
   setTimeout(() => {
     if (collapsed) window.scrollTo({ top: 0, behavior: 'smooth' });
     else btn.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, 50);
 }
+
 
 function toggleDesktopSidebar() {
   const app = document.querySelector('.app');
@@ -1439,13 +1468,15 @@ function renderSnapshotTable(p, r) {
 
 // One-time side effects that should fire after the first run renders.
 // Auto-collapses the explainer, and on mobile auto-collapses the inputs
-// and scrolls results into view so the user lands on the answer.
+// and scrolls to top so the user lands on the answer.
 function applyPostRunUx() {
   const explainer = $('explainerCard');
   if (!explainer.dataset.autoCollapsed) {
     explainer.classList.add('collapsed');
     explainer.dataset.autoCollapsed = '1';
   }
+  // The user actually ran the sim — don't restore the explainer on next hide.
+  state.explainerCollapsedForInputs = false;
 
   if (isMobile()) {
     const body = $('sidebarBody');
@@ -1454,7 +1485,7 @@ function applyPostRunUx() {
       const btn = $('sidebarToggle');
       btn.classList.add('collapsed');
       btn.setAttribute('aria-expanded', 'false');
-      $('sidebarToggleLabel').textContent = 'Input assumptions';
+      $('sidebarToggleLabel').textContent = 'Run Simulation';
     }
     // Scroll to absolute page top — scrollIntoView would put the element at
     // y=0 of the viewport, where the 60px fixed header would cover it.
